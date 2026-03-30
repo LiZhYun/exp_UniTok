@@ -1,6 +1,7 @@
 import gc
 import os
 import sys
+import math
 import time
 import glob
 import torch
@@ -21,6 +22,18 @@ from utils.logger import SmoothedValue, MetricLogger, ProfileLogger, wandb_log
 from open_clip.tokenizer import tokenize
 from open_clip.loss import ClipLoss
 from utils.eval_acc import evaluate as eval_clip
+
+
+def get_percent_schedule(step, total_steps, warmup_fraction=0.7, schedule='cosine'):
+    """Returns a value in [0, 1]. Ramps from 0 to 1 over warmup_fraction of training, then holds at 1.0."""
+    warmup_steps = int(total_steps * warmup_fraction)
+    if step >= warmup_steps:
+        return 1.0
+    t = step / warmup_steps
+    if schedule == 'cosine':
+        return 0.5 * (1 - math.cos(math.pi * t))
+    else:
+        return t
 
 
 def maybe_auto_resume(args: config.Args, pattern='ckpt*.pth'):
@@ -120,6 +133,16 @@ def train_one_ep(
         fade_blur_schedule = 0 if disc_global_iter < 0 else min(1.0, disc_global_iter / (disc_warmup_iter * 2))
         fade_blur_schedule = 1 - fade_blur_schedule
 
+        # percent-gated selective quantization schedule
+        quant_percent = None
+        if args.use_percent_gate:
+            quant_percent = get_percent_schedule(
+                global_iter, args.epoch * num_iters,
+                warmup_fraction=args.percent_warmup_frac,
+                schedule=args.percent_schedule,
+            )
+            misc.unwrap_model(trainer.unitok).quantizer.set_percent(quant_percent)
+
         trainer.train_step(
             img=imgs,
             text=texts,
@@ -128,7 +151,8 @@ def train_one_ep(
             metric_logger=metric_logger,
             warmup_disc_schedule=warmup_disc_schedule,
             fade_blur_schedule=fade_blur_schedule,
-            report_wandb=args.report_wandb
+            report_wandb=args.report_wandb,
+            quant_percent=quant_percent,
         )
 
         metric_logger.update(glr=max(unitok_lr_stats))
@@ -312,12 +336,16 @@ def main():
         }, ckpt_path)
     dist.barrier()
 
-    fid, isc = eval_fid(
-        misc.unwrap_model(trainer.unitok),
-        args.fid_eval_src,
-        args.fid_eval_dst,
-        args.fid_feature_extractor
-    )
+    if args.fid_eval_src and args.fid_eval_dst:
+        fid, isc = eval_fid(
+            misc.unwrap_model(trainer.unitok),
+            args.fid_eval_src,
+            args.fid_eval_dst,
+            args.fid_feature_extractor
+        )
+    else:
+        fid, isc = -1, -1
+        print('[eval] Skipping FID evaluation (fid_eval_src or fid_eval_dst not set)')
 
     total_time = f'{(time.time() - start_time) / 60 / 60:.1f}h'
     print(f"[train] Total Training Time: {total_time},\t Lg: {stats['Lnll']:.3f},\t Ld: {stats['Ld']:.3f}")

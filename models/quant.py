@@ -66,6 +66,7 @@ class VectorQuantizer(nn.Module):
 
         self.use_entropy_loss = use_entropy_loss
         self.inv_entropy_tau = 1 / entropy_temp
+        self.register_buffer("percent", torch.tensor(1.0, dtype=torch.float32), persistent=False)
 
     def init_vocab(self, eini: float):
         if eini > 0:
@@ -83,14 +84,30 @@ class VectorQuantizer(nn.Module):
         features = features.reshape(-1, C)
         features = F.normalize(features, dim=-1).float()
         codebook_embed = self.codebook.get_norm_weight()
+
+        # nearest code lookup
         indices = torch.argmax(features.detach() @ codebook_embed.T, dim=1)
         entropy_loss = get_entropy_loss(features, codebook_embed, self.inv_entropy_tau) if self.use_entropy_loss else 0
         features_hat = self.codebook(indices)
 
-        # calc loss
-        vq_loss = F.mse_loss(features_hat.detach(), features).mul_(self.beta) + F.mse_loss(features_hat,
-                                                                                           features.detach())
-        features_hat = (features_hat.detach() - features.detach()).add_(features)
+        # straight-through estimator
+        features_hat_ste = (features_hat.detach() - features.detach()).add_(features)
+
+        # percent-gated filtering: bypass high-error tokens during training
+        if self.training and self.percent.item() < 1.0:
+            quant_err = (features - features_hat).square().sum(dim=-1)
+            k = max(1, int(self.percent.item() * quant_err.numel()))
+            thresh = quant_err.kthvalue(k).values
+            mask = (quant_err <= thresh).unsqueeze(-1)
+            features_gated = torch.where(mask, features_hat_ste, features)
+        else:
+            features_gated = features_hat_ste
+
+        # VQ loss: codebook loss on all tokens, commitment loss on gated output
+        vq_loss = (
+            F.mse_loss(features_hat, features.detach())
+            + self.beta * F.mse_loss(features_gated.detach(), features)
+        )
 
         # update vocab_usage
         prob_per_class_is_chosen = indices.bincount(minlength=self.vocab_size).float()
@@ -108,7 +125,7 @@ class VectorQuantizer(nn.Module):
             self.vocab_usage.mul_(0.99).add_(prob_per_class_is_chosen, alpha=0.01)
         self.vocab_usage_record_times += 1
 
-        return features_hat.view(B, L, C), vq_loss, entropy_loss, vocab_usage
+        return features_gated.view(B, L, C), vq_loss, entropy_loss, vocab_usage
 
     def f_to_idx(self, features):
         B, L, C = features.shape
@@ -145,6 +162,10 @@ class VectorQuantizerM(nn.Module):
     def init_vocab(self, eini: float):
         for codebook in self.codebooks:
             codebook.init_vocab(eini)
+
+    def set_percent(self, value: float):
+        for codebook in self.codebooks:
+            codebook.percent.fill_(value)
 
     def f_to_idx(self, features):
         indices = []

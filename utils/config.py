@@ -57,6 +57,9 @@ class Args(Tap):
     vq_beta: float = 0.25  # commitment loss weight
     num_codebooks: int = 8
     quant_proj: str = 'attn'
+    use_percent_gate: bool = False       # enable percent-gated selective quantization
+    percent_warmup_frac: float = 0.7     # fraction of total steps for 0→1 ramp
+    percent_schedule: str = 'cosine'     # 'cosine' or 'linear'
 
     # model
     embed_dim: int = 768

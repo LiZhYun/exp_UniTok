@@ -81,7 +81,8 @@ class Trainer(object):
         metric_logger: MetricLogger,
         warmup_disc_schedule: float,
         fade_blur_schedule: float,
-        report_wandb: bool = False
+        report_wandb: bool = False,
+        quant_percent: float = None,
     ) -> Tuple[torch.Tensor, Optional[float], Optional[torch.Tensor], Optional[float]]:
         if warmup_disc_schedule < 1e-6:
             warmup_disc_schedule = 0
@@ -244,6 +245,8 @@ class Trainer(object):
             wandb_log({'Disc_warmup_schedule': warmup_disc_schedule}, step=global_iter, log_ferq=log_ferq)
             wandb_log({'Disc_fade_blur_schedule': fade_blur_schedule}, step=global_iter, log_ferq=log_ferq)
             wandb_log({'Logit_scale': output['logit_scale']}, step=global_iter, log_ferq=log_ferq)
+            if quant_percent is not None:
+                wandb_log({'Quant_percent': quant_percent}, step=global_iter, log_ferq=log_ferq)
         return
 
     def __repr__(self):
