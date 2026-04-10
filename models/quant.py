@@ -87,10 +87,11 @@ class VectorQuantizer(nn.Module):
 
         # nearest code lookup
         indices = torch.argmax(features.detach() @ codebook_embed.T, dim=1)
-        entropy_loss = get_entropy_loss(features, codebook_embed, self.inv_entropy_tau) if self.use_entropy_loss else 0
+        """entropy_loss = get_entropy_loss(features, codebook_embed, self.inv_entropy_tau) if self.use_entropy_loss else 0"""
+        entropy_loss = torch.zeros(0.0, requires_grad=True)  # TODO XXX rongzhen
         features_hat = self.codebook(indices)
 
-        # straight-through estimator
+        """# straight-through estimator
         features_hat_ste = (features_hat.detach() - features.detach()).add_(features)
 
         # percent-gated filtering: bypass high-error tokens during training
@@ -101,7 +102,8 @@ class VectorQuantizer(nn.Module):
             mask = (quant_err <= thresh).unsqueeze(-1)
             features_gated = torch.where(mask, features_hat_ste, features)
         else:
-            features_gated = features_hat_ste
+            features_gated = features_hat_ste"""
+        features_gated = features  # TODO XXX rongzhen
 
         # VQ loss: codebook loss on all tokens, commitment loss on gated output
         vq_loss = (
