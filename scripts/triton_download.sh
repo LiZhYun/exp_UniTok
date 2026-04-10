@@ -30,12 +30,11 @@ OUTPUT_DIR="$WRKDIR/data/datacomp"
 # ── Setup ──────────────────────────────────────────────────────────────────────
 pip install img2dataset datasets pandas pyarrow --quiet
 
-PROJ_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 mkdir -p "$OUTPUT_DIR" logs
 
 # ── Download ───────────────────────────────────────────────────────────────────
 echo "Downloading ${NUM_PAIRS} metadata pairs -> images at ${OUTPUT_DIR}/"
-python "$PROJ_DIR/scripts/download_datacomp_small.py" \
+python "./scripts/download_datacomp_small.py" \
     --output_dir "$OUTPUT_DIR" \
     --num_pairs "$NUM_PAIRS" \
     --processes_count 16 \

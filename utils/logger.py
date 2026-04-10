@@ -218,16 +218,16 @@ class ProfileLogger(object):
             self.last_t_perf = time.perf_counter()
 
 
-def wandb_log(data, step=None, log_ferq=None, commit=None, sync=None):
+def wandb_log(data, step=None, log_ferq=None, commit=None):
     if not dist.is_master():
         return
     if step is not None and log_ferq is not None:
         if step % log_ferq == 0:
-            wandb.log(data, step=step, commit=commit, sync=sync)
+            wandb.log(data, step=step, commit=commit)
         else:
             return
     else:
-        wandb.log(data, step=step, commit=commit, sync=sync)
+        wandb.log(data, step=step, commit=commit)
 
 
 def create_tb_log(args: config.Args):

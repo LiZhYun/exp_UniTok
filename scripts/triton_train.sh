@@ -1,13 +1,14 @@
 #!/bin/bash
 #SBATCH --job-name=unitok_train
+#SBATCH --array=0-1
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=12
 #SBATCH --mem=128G
 #SBATCH --time=0-23:00:00
 #SBATCH --gres=gpu:h200:1
-#SBATCH --output=logs/unitok_%j.out
-#SBATCH --error=logs/unitok_%j.err
+#SBATCH --output=logs/unitok_%A_%a.out
+#SBATCH --error=logs/unitok_%A_%a.err
 
 # ── Environment ────────────────────────────────────────────────────────────────
 module load mamba
@@ -20,13 +21,14 @@ export PIP_CACHE_DIR=$WRKDIR/.pip_cache
 export CONDA_PKGS_DIRS=$WRKDIR/.conda_pkgs
 export CONDA_ENVS_PATH=$WRKDIR/.conda_envs
 export TORCH_EXTENSIONS_DIR=$WRKDIR/torch_extensions
-export WANDB_DIR=$WRKDIR/wandb
 export WANDB_CACHE_DIR=$WRKDIR/wandb_cache
+
+mkdir -p "$WANDB_CACHE_DIR"
 
 source activate unitok   # <-- change to your conda env name
 
 # ── Paths ──────────────────────────────────────────────────────────────────────
-PROJ_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+PROJ_DIR="/scratch/work/liz23/exp_UniTok"
 cd "$PROJ_DIR"
 
 export PYTHONPATH="${PROJ_DIR}:$PYTHONPATH"
@@ -50,7 +52,23 @@ SHARD_PATTERN="${SHARD_DIR}/{00000..$(printf '%05d' $LAST)}.tar"
 TRAIN_SAMPLES=$((NUM_SHARDS * SAMPLES_PER_SHARD))
 echo "Found ${NUM_SHARDS} shards, ~${TRAIN_SAMPLES} samples (${SAMPLES_PER_SHARD}/shard), ${EPOCHS} epoch(s) -> ${SHARD_PATTERN}"
 
-mkdir -p logs
+# ── Ensure vis_imgs directory has sample images ───────────────────────────────
+VIS_DIR="${OUTPUT_DIR}/vis_imgs"
+if [ ! -d "$VIS_DIR" ] || [ -z "$(ls -A "$VIS_DIR" 2>/dev/null)" ]; then
+    mkdir -p "$VIS_DIR"
+    echo "Extracting sample images for visualization ..."
+    python -c "
+import tarfile, os, sys
+shard = '${SHARD_DIR}/00000.tar'
+out = '${VIS_DIR}'
+with tarfile.open(shard) as t:
+    jpgs = [m for m in t.getmembers() if m.name.endswith('.jpg')][:8]
+    for m in jpgs:
+        m.name = os.path.basename(m.name)
+        t.extract(m, out)
+print(f'Extracted {len(jpgs)} images to {out}')
+"
+fi
 
 # ── Common training args ────────────────────────────────────────────────────────
 COMMON="
@@ -70,34 +88,37 @@ COMMON="
     --epoch ${EPOCHS}
 "
 
+# Use unique master_port per array task to avoid collisions
+MASTER_PORT=$((29500 + SLURM_ARRAY_TASK_ID))
 LAUNCH="torchrun --nproc_per_node=1 --nnodes=1 --node_rank=0
-    --master_addr=localhost --master_port=29500"
+    --master_addr=localhost --master_port=${MASTER_PORT}"
 
-# ── Run 1: Baseline ─────────────────────────────────────────────────────────────
-echo ""
-echo "=========================================="
-echo "  Baseline (standard VQ)"
-echo "=========================================="
-$LAUNCH main.py $COMMON \
-    --output_dir ${OUTPUT_DIR}/baseline \
-    --exp_name baseline \
-    --use_percent_gate False \
-    "$@"
-
-# ── Run 2: Percent-Gated ────────────────────────────────────────────────────────
-echo ""
-echo "=========================================="
-echo "  Percent-Gated Selective Quantization"
-echo "=========================================="
-$LAUNCH main.py $COMMON \
-    --output_dir ${OUTPUT_DIR}/percent_gated \
-    --exp_name percent_gated \
-    --use_percent_gate True \
-    --percent_warmup_frac 0.7 \
-    --percent_schedule cosine \
-    "$@"
-
-echo ""
-echo "=== Both runs complete ==="
-echo "Baseline:      ${OUTPUT_DIR}/baseline/"
-echo "Percent-gated: ${OUTPUT_DIR}/percent_gated/"
+# ── Select experiment by array task ID ─────────────────────────────────────────
+case $SLURM_ARRAY_TASK_ID in
+    0)
+        echo "=========================================="
+        echo "  Baseline (standard VQ)"
+        echo "=========================================="
+        export WANDB_DIR=${OUTPUT_DIR}/baseline/wandb
+        mkdir -p "$WANDB_DIR"
+        $LAUNCH main.py $COMMON \
+            --output_dir ${OUTPUT_DIR}/baseline \
+            --exp_name baseline \
+            --use_percent_gate False \
+            "$@"
+        ;;
+    1)
+        echo "=========================================="
+        echo "  Percent-Gated Selective Quantization"
+        echo "=========================================="
+        export WANDB_DIR=${OUTPUT_DIR}/percent_gated/wandb
+        mkdir -p "$WANDB_DIR"
+        $LAUNCH main.py $COMMON \
+            --output_dir ${OUTPUT_DIR}/percent_gated \
+            --exp_name percent_gated \
+            --use_percent_gate True \
+            --percent_warmup_frac 0.7 \
+            --percent_schedule cosine \
+            "$@"
+        ;;
+esac

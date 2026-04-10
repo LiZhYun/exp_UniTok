@@ -105,6 +105,7 @@ def get_boundary(patch_size, needs_loss, boundary_wid=3):  # vis_img: BCHW, need
 
 def setup_visualizer(args, trainer, preprocess_val):
     vis_imgs = []
+    os.makedirs(args.vis_img_dir, exist_ok=True)
     for img in os.listdir(args.vis_img_dir):
         img = os.path.join(args.vis_img_dir, img)
         img = pil_load(img, args.img_size * 2)
